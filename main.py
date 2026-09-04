@@ -9,6 +9,7 @@ Press q in the OpenCV window to quit.
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+import time
 from typing import Callable, Dict, Iterable, List, Tuple
 from urllib.request import urlretrieve
 
@@ -316,6 +317,22 @@ def draw_neon_face(
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
 
 
+def draw_hud(canvas: np.ndarray, state: GestureState, fps: float) -> None:
+    """Draw compact live controls on the replica panel only."""
+    panel = canvas.copy()
+    cv2.rectangle(panel, (10, 10), (178, 93), (4, 13, 18), -1)
+    cv2.addWeighted(panel, 0.78, canvas, 0.22, 0, canvas)
+    hud_color = (180, 240, 240)
+    rows = (
+        f"OPACITY  {state.opacity:>5.0%}",
+        f"FINGERS  {state.right_fingers}/5",
+        f"FPS      {fps:>5.1f}",
+    )
+    for row, text in enumerate(rows):
+        cv2.putText(canvas, text, (20, 34 + row * 24), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.48, hud_color, 1, cv2.LINE_AA)
+
+
 def main() -> None:
     face_model = ensure_model(MODEL_DIR / "face_landmarker.task", FACE_MODEL_URL)
     hand_model = ensure_model(MODEL_DIR / "hand_landmarker.task", HAND_MODEL_URL)
@@ -346,6 +363,8 @@ def main() -> None:
     # Future features can subscribe without modifying the tracking loop:
     # controller.on("right_open_palm", lambda state: start_particle_pulse())
     timestamp_ms = 0
+    fps = 0.0
+    previous_time = time.perf_counter()
 
     with vision.FaceLandmarker.create_from_options(face_options) as face_landmarker, vision.HandLandmarker.create_from_options(hand_options) as hand_landmarker:
         try:
@@ -353,6 +372,12 @@ def main() -> None:
                 ok, frame = cap.read()
                 if not ok:
                     break
+                current_time = time.perf_counter()
+                frame_delta = current_time - previous_time
+                previous_time = current_time
+                if frame_delta > 0:
+                    instant_fps = 1.0 / frame_delta
+                    fps = instant_fps if fps == 0.0 else fps * 0.9 + instant_fps * 0.1
 
                 mirrored = cv2.flip(frame, 1)
                 frame_height, frame_width = mirrored.shape[:2]
@@ -378,6 +403,7 @@ def main() -> None:
                     )
                 else:
                     face_smoother.reset()
+                draw_hud(replica, state, fps)
                 combined = np.hstack((mirrored, replica))
                 cv2.imshow("Neon Dot-Face Tracker", combined)
 
