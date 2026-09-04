@@ -25,6 +25,9 @@ from mediapipe.tasks.python import vision
 CAMERA_INDEX = 0
 REQUESTED_WIDTH = 640
 REQUESTED_HEIGHT = 480
+INFERENCE_WIDTH = 320
+INFERENCE_HEIGHT = 240
+HAND_DETECTION_INTERVAL = 2  # Run hand inference every other frame.
 MIN_DETECTION_CONFIDENCE = 0.5
 MIN_TRACKING_CONFIDENCE = 0.5
 FACE_SMOOTHING_ALPHA = 0.35  # Lower = smoother; higher = more responsive.
@@ -85,6 +88,12 @@ FACE_CONNECTIONS = {
     )
 }
 FEATURE_INDICES = {0, 13, 14, 17, 61, 291, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477}
+GLOW_INDICES = FEATURE_INDICES | {10, 152, 234, 454, 197, 5, 4}
+# Half the tessellation connections are enough to preserve the hologram shape
+# while substantially reducing per-frame line rasterization.
+FACE_TESSELLATION_LIGHT = {
+    connection for connection in FACE_TESSELLATION if (connection[0] + connection[1]) % 2 == 0
+}
 
 
 def ensure_model(path: Path, url: str) -> Path:
@@ -309,7 +318,7 @@ def draw_neon_face(
     # A dim full wireframe provides a futuristic 3D feel without overpowering
     # the brighter face outline and expression landmarks.
     if display_mode == "hologram":
-        for start, end in FACE_TESSELLATION:
+        for start, end in FACE_TESSELLATION_LIGHT:
             if start < len(points) and end < len(points):
                 cv2.line(mesh, points[start], points[end], mesh_color, 1, cv2.LINE_AA)
 
@@ -318,9 +327,13 @@ def draw_neon_face(
         if start < len(points) and end < len(points):
             cv2.line(glow, points[start], points[end], accent_color, 2, cv2.LINE_AA)
     for index, (x, y) in enumerate(points):
-        radius = 5 + int(depth[index] * 2) + int(boost)
-        cv2.circle(glow, (x, y), radius, accent_color, -1, cv2.LINE_AA)
-    glow = cv2.GaussianBlur(glow, (0, 0), sigmaX=3.0)
+        if index in GLOW_INDICES:
+            radius = 5 + int(depth[index] * 2) + int(boost)
+            cv2.circle(glow, (x, y), radius, accent_color, -1, cv2.LINE_AA)
+    # Blurring a half-size layer gives a similar soft halo at a lower cost.
+    small_glow = cv2.resize(glow, (panel_width // 2, panel_height // 2), interpolation=cv2.INTER_AREA)
+    small_glow = cv2.GaussianBlur(small_glow, (0, 0), sigmaX=2.0)
+    glow = cv2.resize(small_glow, (panel_width, panel_height), interpolation=cv2.INTER_LINEAR)
 
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
@@ -415,6 +428,8 @@ def main() -> None:
     cap = cv2.VideoCapture(CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, REQUESTED_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, REQUESTED_HEIGHT)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam. Check CAMERA_INDEX and camera permissions.")
 
@@ -427,6 +442,8 @@ def main() -> None:
     previous_time = time.perf_counter()
     video_writer: cv2.VideoWriter | None = None
     recording_path: Path | None = None
+    frame_number = 0
+    hand_result = None
 
     with vision.FaceLandmarker.create_from_options(face_options) as face_landmarker, vision.HandLandmarker.create_from_options(hand_options) as hand_landmarker:
         try:
@@ -434,6 +451,7 @@ def main() -> None:
                 ok, frame = cap.read()
                 if not ok:
                     break
+                frame_number += 1
                 current_time = time.perf_counter()
                 frame_delta = current_time - previous_time
                 previous_time = current_time
@@ -443,16 +461,20 @@ def main() -> None:
 
                 mirrored = cv2.flip(frame, 1)
                 frame_height, frame_width = mirrored.shape[:2]
-                rgb = cv2.cvtColor(mirrored, cv2.COLOR_BGR2RGB)
+                inference_frame = cv2.resize(
+                    mirrored, (INFERENCE_WIDTH, INFERENCE_HEIGHT), interpolation=cv2.INTER_AREA
+                )
+                rgb = cv2.cvtColor(inference_frame, cv2.COLOR_BGR2RGB)
                 image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                 timestamp_ms += 33
                 face_result = face_landmarker.detect_for_video(image, timestamp_ms)
-                hand_result = hand_landmarker.detect_for_video(image, timestamp_ms)
+                if frame_number % HAND_DETECTION_INTERVAL == 0 or hand_result is None:
+                    hand_result = hand_landmarker.detect_for_video(image, timestamp_ms)
 
                 # No hands means controls retain their last known values.
                 state = controller.update(
-                    hand_result.hand_landmarks,
-                    hand_result.handedness,
+                    hand_result.hand_landmarks if hand_result is not None else [],
+                    hand_result.handedness if hand_result is not None else [],
                     frame_width,
                     frame_height,
                 )
