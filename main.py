@@ -2,15 +2,20 @@
 
 Run with: python main.py
 Install dependencies first: pip install -r requirements.txt
+The first run downloads two small MediaPipe Tasks model files into models/.
 Press q in the OpenCV window to quit.
 """
 
 from collections import deque
-from typing import Tuple
+from pathlib import Path
+from typing import Iterable, Tuple
+from urllib.request import urlretrieve
 
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision
 
 
 # These values are intentionally easy to tune for different cameras and lighting.
@@ -23,10 +28,14 @@ MAX_NUM_FACES = 1
 MAX_NUM_HANDS = 2
 OPACITY_HISTORY_LENGTH = 5
 
-# Pinch distances are fractions of the actual frame width, so they scale with
-# 480p/720p cameras. Recalibrate these fractions if a different camera needs it.
+# Pinch distances are fractions of the actual frame width. Recalibrate these
+# fractions if a different camera, distance, or lighting setup needs it.
 PINCH_MIN_FRACTION = 0.035
 PINCH_MAX_FRACTION = 0.24
+
+MODEL_DIR = Path(__file__).with_name("models")
+FACE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
 
 # OpenCV uses BGR tuples. The fist selection is a bright, neutral "off" mode.
 NEON_PALETTE = {
@@ -40,13 +49,24 @@ NEON_PALETTE = {
 DEFAULT_COLOR = NEON_PALETTE[1]
 DEFAULT_OPACITY = 1.0
 
-mp_face_mesh = mp.solutions.face_mesh
-mp_hands = mp.solutions.hands
+# A curated subset keeps the constellation readable while showing key contours.
+FACE_CONNECTIONS = {
+    (connection.start, connection.end)
+    for connection in (
+        list(vision.FaceLandmarksConnections.FACE_LANDMARKS_CONTOURS)
+        + list(vision.FaceLandmarksConnections.FACE_LANDMARKS_LEFT_IRIS)
+        + list(vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS)
+    )
+}
 
-# A curated subset keeps the constellation readable while still showing
-# expression-critical contours. MediaPipe's connection tuples are (start, end).
-FACE_CONNECTIONS = set(mp_face_mesh.FACEMESH_CONTOURS)
-FACE_CONNECTIONS.update(mp_face_mesh.FACEMESH_IRISES)
+
+def ensure_model(path: Path, url: str) -> Path:
+    """Download a Tasks model once, keeping runtime setup self-contained."""
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Downloading {path.name}...")
+        urlretrieve(url, path)
+    return path
 
 
 def normalized_to_pixel(landmark, width: int, height: int) -> Tuple[int, int]:
@@ -56,13 +76,13 @@ def normalized_to_pixel(landmark, width: int, height: int) -> Tuple[int, int]:
     return x, y
 
 
-def count_extended_fingers(hand_landmarks, handedness: str) -> int:
+def count_extended_fingers(hand_landmarks: Iterable, handedness: str) -> int:
     """Count raised fingers using fingertip-to-joint geometry.
 
     Four fingers use vertical tip/PIP comparisons. The thumb uses a horizontal
-    comparison whose direction follows MediaPipe's handedness label.
+    comparison whose direction follows the handedness label on mirrored input.
     """
-    points = hand_landmarks.landmark
+    points = list(hand_landmarks)
     count = 0
 
     # Index, middle, ring, and pinky: a raised fingertip is above its PIP joint.
@@ -70,40 +90,39 @@ def count_extended_fingers(hand_landmarks, handedness: str) -> int:
         if points[tip_index].y < points[pip_index].y:
             count += 1
 
-    # The handedness label is based on a mirrored selfie input, matching our feed.
     if handedness.lower() == "right":
         if points[4].x < points[3].x:
             count += 1
     elif points[4].x > points[3].x:
         count += 1
-
     return count
 
 
-def pinch_opacity(hand_landmarks, frame_width: int, frame_height: int) -> float:
-    """Map thumb/index separation to a clamped opacity value."""
-    thumb = hand_landmarks.landmark[4]
-    index = hand_landmarks.landmark[8]
-    # Convert normalized landmarks to pixels first; this keeps the calibration
-    # tied to the actual capture resolution rather than an assumed HD size.
+def pinch_opacity(hand_landmarks: Iterable, frame_width: int, frame_height: int) -> float:
+    """Map thumb/index separation in actual pixels to a clamped opacity."""
+    points = list(hand_landmarks)
+    thumb, index = points[4], points[8]
     distance_pixels = float(
         np.hypot((thumb.x - index.x) * frame_width, (thumb.y - index.y) * frame_height)
     )
     min_pixels = PINCH_MIN_FRACTION * frame_width
     max_pixels = PINCH_MAX_FRACTION * frame_width
-    normalized = (distance_pixels - min_pixels) / (
-        max_pixels - min_pixels
-    )
+    normalized = (distance_pixels - min_pixels) / (max_pixels - min_pixels)
     return float(np.clip(0.1 + normalized * 0.9, 0.1, 1.0))
 
 
 def draw_neon_face(
-    landmarks, panel_width: int, panel_height: int, color: Tuple[int, int, int], opacity: float
+    landmarks: Iterable,
+    panel_width: int,
+    panel_height: int,
+    color: Tuple[int, int, int],
+    opacity: float,
 ) -> np.ndarray:
     """Render the face as one glow layer plus a crisp landmark layer."""
     glow = np.zeros((panel_height, panel_width, 3), dtype=np.uint8)
     crisp = np.zeros_like(glow)
-    points = [normalized_to_pixel(point, panel_width, panel_height) for point in landmarks.landmark]
+    landmarks = list(landmarks)
+    points = [normalized_to_pixel(point, panel_width, panel_height) for point in landmarks]
 
     # Soft, blurred geometry underneath bright geometry creates the neon effect.
     for start, end in FACE_CONNECTIONS:
@@ -130,6 +149,24 @@ def put_status(canvas: np.ndarray, color: Tuple[int, int, int], opacity: float) 
 
 
 def main() -> None:
+    face_model = ensure_model(MODEL_DIR / "face_landmarker.task", FACE_MODEL_URL)
+    hand_model = ensure_model(MODEL_DIR / "hand_landmarker.task", HAND_MODEL_URL)
+
+    face_options = vision.FaceLandmarkerOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=str(face_model)),
+        running_mode=vision.RunningMode.VIDEO,
+        num_faces=MAX_NUM_FACES,
+        min_face_detection_confidence=MIN_DETECTION_CONFIDENCE,
+        min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
+    )
+    hand_options = vision.HandLandmarkerOptions(
+        base_options=mp_python.BaseOptions(model_asset_path=str(hand_model)),
+        running_mode=vision.RunningMode.VIDEO,
+        num_hands=MAX_NUM_HANDS,
+        min_hand_detection_confidence=MIN_DETECTION_CONFIDENCE,
+        min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
+    )
+
     cap = cv2.VideoCapture(CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, REQUESTED_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, REQUESTED_HEIGHT)
@@ -139,18 +176,9 @@ def main() -> None:
     selected_color = DEFAULT_COLOR
     opacity = DEFAULT_OPACITY
     opacity_history: deque[float] = deque(maxlen=OPACITY_HISTORY_LENGTH)
+    timestamp_ms = 0
 
-    with mp_face_mesh.FaceMesh(
-        max_num_faces=MAX_NUM_FACES,
-        refine_landmarks=True,
-        min_detection_confidence=MIN_DETECTION_CONFIDENCE,
-        min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
-    ) as face_mesh, mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=MAX_NUM_HANDS,
-        min_detection_confidence=MIN_DETECTION_CONFIDENCE,
-        min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
-    ) as hands:
+    with vision.FaceLandmarker.create_from_options(face_options) as face_landmarker, vision.HandLandmarker.create_from_options(hand_options) as hand_landmarker:
         try:
             while True:
                 ok, frame = cap.read()
@@ -159,32 +187,26 @@ def main() -> None:
 
                 mirrored = cv2.flip(frame, 1)
                 frame_height, frame_width = mirrored.shape[:2]
-                face_result = face_mesh.process(cv2.cvtColor(mirrored, cv2.COLOR_BGR2RGB))
-                hand_result = hands.process(cv2.cvtColor(mirrored, cv2.COLOR_BGR2RGB))
+                rgb = cv2.cvtColor(mirrored, cv2.COLOR_BGR2RGB)
+                image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                timestamp_ms += 33
+                face_result = face_landmarker.detect_for_video(image, timestamp_ms)
+                hand_result = hand_landmarker.detect_for_video(image, timestamp_ms)
 
                 # No hands means controls retain their last known values.
-                if hand_result.multi_hand_landmarks and hand_result.multi_handedness:
-                    for hand_landmarks, classification in zip(
-                        hand_result.multi_hand_landmarks, hand_result.multi_handedness
-                    ):
-                        label = classification.classification[0].label
-                        if label.lower() == "right":
-                            fingers = count_extended_fingers(hand_landmarks, label)
-                            selected_color = NEON_PALETTE[fingers]
-                        elif label.lower() == "left":
-                            opacity_history.append(
-                                pinch_opacity(hand_landmarks, frame_width, frame_height)
-                            )
-                            opacity = float(np.mean(opacity_history))
+                for hand_landmarks, handedness_list in zip(hand_result.hand_landmarks, hand_result.handedness):
+                    label = handedness_list[0].category_name
+                    if label.lower() == "right":
+                        fingers = count_extended_fingers(hand_landmarks, label)
+                        selected_color = NEON_PALETTE[fingers]
+                    elif label.lower() == "left":
+                        opacity_history.append(pinch_opacity(hand_landmarks, frame_width, frame_height))
+                        opacity = float(np.mean(opacity_history))
 
                 replica = np.zeros_like(mirrored)
-                if face_result.multi_face_landmarks:
+                if face_result.face_landmarks:
                     replica = draw_neon_face(
-                        face_result.multi_face_landmarks[0],
-                        frame_width,
-                        frame_height,
-                        selected_color,
-                        opacity,
+                        face_result.face_landmarks[0], frame_width, frame_height, selected_color, opacity
                     )
                 put_status(replica, selected_color, opacity)
                 combined = np.hstack((mirrored, replica))
