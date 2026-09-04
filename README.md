@@ -21,4 +21,14 @@ Hand interpretation is centralized in `GestureController`. It exposes stable nam
 controller.on("right_open_palm", lambda state: start_particle_pulse())
 ```
 
+The recommended control map is:
+
+| Gesture | Behavior | Event/state |
+|---|---|---|
+| Right hand, 0–5 fingers | Selects white, cyan, magenta, green, yellow, or purple | `right_fist` through `right_open_palm` |
+| Right thumbs-up | Requests a temporary hologram boost | `right_thumbs_up`, `state.boost` |
+| Left pinch | Sets continuous opacity | `left_pinch`, `state.opacity` |
+| Left open hand | Resets opacity to 100% | `left_open_hand` |
+| Both open palms | Requests a scan pulse | `both_open`, `state.scan_pulse` |
+
 Add additional gesture names or classification rules inside `GestureController.update()`. Continuous values remain available through `state.opacity`, `state.right_fingers`, and `state.events`.

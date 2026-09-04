@@ -136,6 +136,8 @@ class GestureState:
     right_fingers: int = 1
     right_gesture: str = "point"
     left_gesture: str = "unknown"
+    boost: bool = False
+    scan_pulse: float = 0.0
     events: List[str] = field(default_factory=list)
 
 
@@ -172,22 +174,41 @@ class GestureController:
         Missing hands intentionally do not reset state, so controls remain stable.
         """
         self.state.events = []
+        self.state.scan_pulse *= 0.90
+        visible_gestures = {}
         for hand_landmarks, handedness in zip(hand_landmarks_list, handedness_list):
             label = handedness[0].category_name.lower()
             if label == "right":
                 fingers = count_extended_fingers(hand_landmarks, label)
                 gesture = RIGHT_GESTURE_NAMES[fingers]
+                points = list(hand_landmarks)
+                # A thumb pointing upward with all other fingers folded is a
+                # semantic thumbs-up, while still retaining the cyan color slot.
+                other_fingers_folded = all(points[tip].y > points[pip].y for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)))
+                if fingers == 1 and points[4].y < points[0].y and other_fingers_folded:
+                    gesture = "thumbs_up"
                 self.state.right_fingers = fingers
                 self.state.right_gesture = gesture
                 self.state.color = NEON_PALETTE[fingers]
+                self.state.boost = gesture == "thumbs_up"
+                visible_gestures[label] = gesture
                 self._emit_transition("right", gesture)
             elif label == "left":
                 current_opacity = pinch_opacity(hand_landmarks, width, height)
                 self._opacity_history.append(current_opacity)
                 self.state.opacity = float(np.mean(self._opacity_history))
                 gesture = "pinch" if self.state.opacity < 0.28 else "open_hand"
+                if gesture == "open_hand" and self._last_labels.get("left") == "pinch":
+                    self._opacity_history.clear()
+                    self.state.opacity = 1.0
                 self.state.left_gesture = gesture
+                visible_gestures[label] = gesture
                 self._emit_transition("left", gesture)
+        if visible_gestures.get("right") == "open_palm" and visible_gestures.get("left") == "open_hand":
+            self.state.scan_pulse = 1.0
+            self._emit_transition("both", "open")
+        else:
+            self._last_labels.pop("both", None)
         return self.state
 
 
