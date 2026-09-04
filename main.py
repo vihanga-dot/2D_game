@@ -7,8 +7,9 @@ Press q in the OpenCV window to quit.
 """
 
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Callable, Dict, Iterable, List, Tuple
 from urllib.request import urlretrieve
 
 import cv2
@@ -48,6 +49,15 @@ NEON_PALETTE = {
 }
 DEFAULT_COLOR = NEON_PALETTE[1]
 DEFAULT_OPACITY = 1.0
+
+RIGHT_GESTURE_NAMES = {
+    0: "fist",
+    1: "point",
+    2: "peace",
+    3: "three",
+    4: "four",
+    5: "open_palm",
+}
 
 # The full tessellation adds structure; the contour subset stays brighter so the
 # mesh remains readable instead of becoming a wall of equally bright lines.
@@ -117,6 +127,70 @@ def pinch_opacity(hand_landmarks: Iterable, frame_width: int, frame_height: int)
     return float(np.clip(0.1 + normalized * 0.9, 0.1, 1.0))
 
 
+@dataclass
+class GestureState:
+    """Current controls plus named gestures that other features can consume."""
+
+    color: Tuple[int, int, int] = DEFAULT_COLOR
+    opacity: float = DEFAULT_OPACITY
+    right_fingers: int = 1
+    right_gesture: str = "point"
+    left_gesture: str = "unknown"
+    events: List[str] = field(default_factory=list)
+
+
+class GestureController:
+    """Translate raw Tasks landmarks into stable controls and extensible events.
+
+    Register a callback for any event name, for example:
+        controller.on("right_open_palm", lambda state: trigger_particles())
+    Add new behavior in this class without changing the webcam/render loop.
+    """
+
+    def __init__(self) -> None:
+        self.state = GestureState()
+        self._opacity_history: deque[float] = deque(maxlen=OPACITY_HISTORY_LENGTH)
+        self._last_labels: Dict[str, str] = {}
+        self._handlers: Dict[str, List[Callable[[GestureState], None]]] = {}
+
+    def on(self, event_name: str, handler: Callable[[GestureState], None]) -> None:
+        """Register a function called once when a named gesture changes into view."""
+        self._handlers.setdefault(event_name, []).append(handler)
+
+    def _emit_transition(self, hand: str, label: str) -> None:
+        event_name = f"{hand}_{label}"
+        if self._last_labels.get(hand) == label:
+            return
+        self._last_labels[hand] = label
+        self.state.events.append(event_name)
+        for handler in self._handlers.get(event_name, []):
+            handler(self.state)
+
+    def update(self, hand_landmarks_list: Iterable, handedness_list: Iterable, width: int, height: int) -> GestureState:
+        """Update controls from one frame of Tasks hand results.
+
+        Missing hands intentionally do not reset state, so controls remain stable.
+        """
+        self.state.events = []
+        for hand_landmarks, handedness in zip(hand_landmarks_list, handedness_list):
+            label = handedness[0].category_name.lower()
+            if label == "right":
+                fingers = count_extended_fingers(hand_landmarks, label)
+                gesture = RIGHT_GESTURE_NAMES[fingers]
+                self.state.right_fingers = fingers
+                self.state.right_gesture = gesture
+                self.state.color = NEON_PALETTE[fingers]
+                self._emit_transition("right", gesture)
+            elif label == "left":
+                current_opacity = pinch_opacity(hand_landmarks, width, height)
+                self._opacity_history.append(current_opacity)
+                self.state.opacity = float(np.mean(self._opacity_history))
+                gesture = "pinch" if self.state.opacity < 0.28 else "open_hand"
+                self.state.left_gesture = gesture
+                self._emit_transition("left", gesture)
+        return self.state
+
+
 def draw_neon_face(
     landmarks: Iterable,
     panel_width: int,
@@ -164,9 +238,9 @@ def draw_neon_face(
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
 
 
-def put_status(canvas: np.ndarray, color: Tuple[int, int, int], opacity: float) -> None:
+def put_status(canvas: np.ndarray, state: GestureState) -> None:
     """Add small, unobtrusive control feedback to the replica panel."""
-    text = f"opacity {opacity:.0%}  |  color BGR {color}"
+    text = f"{state.right_gesture}  |  {state.left_gesture}  |  opacity {state.opacity:.0%}"
     cv2.putText(canvas, text, (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 100, 100), 1, cv2.LINE_AA)
 
 
@@ -195,9 +269,9 @@ def main() -> None:
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam. Check CAMERA_INDEX and camera permissions.")
 
-    selected_color = DEFAULT_COLOR
-    opacity = DEFAULT_OPACITY
-    opacity_history: deque[float] = deque(maxlen=OPACITY_HISTORY_LENGTH)
+    controller = GestureController()
+    # Future features can subscribe without modifying the tracking loop:
+    # controller.on("right_open_palm", lambda state: start_particle_pulse())
     timestamp_ms = 0
 
     with vision.FaceLandmarker.create_from_options(face_options) as face_landmarker, vision.HandLandmarker.create_from_options(hand_options) as hand_landmarker:
@@ -216,21 +290,19 @@ def main() -> None:
                 hand_result = hand_landmarker.detect_for_video(image, timestamp_ms)
 
                 # No hands means controls retain their last known values.
-                for hand_landmarks, handedness_list in zip(hand_result.hand_landmarks, hand_result.handedness):
-                    label = handedness_list[0].category_name
-                    if label.lower() == "right":
-                        fingers = count_extended_fingers(hand_landmarks, label)
-                        selected_color = NEON_PALETTE[fingers]
-                    elif label.lower() == "left":
-                        opacity_history.append(pinch_opacity(hand_landmarks, frame_width, frame_height))
-                        opacity = float(np.mean(opacity_history))
+                state = controller.update(
+                    hand_result.hand_landmarks,
+                    hand_result.handedness,
+                    frame_width,
+                    frame_height,
+                )
 
                 replica = np.zeros_like(mirrored)
                 if face_result.face_landmarks:
                     replica = draw_neon_face(
-                        face_result.face_landmarks[0], frame_width, frame_height, selected_color, opacity
+                        face_result.face_landmarks[0], frame_width, frame_height, state.color, state.opacity
                     )
-                put_status(replica, selected_color, opacity)
+                put_status(replica, state)
                 combined = np.hstack((mirrored, replica))
                 cv2.imshow("Neon Dot-Face Tracker", combined)
 
