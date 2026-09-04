@@ -26,6 +26,8 @@ REQUESTED_HEIGHT = 480
 MIN_DETECTION_CONFIDENCE = 0.5
 MIN_TRACKING_CONFIDENCE = 0.5
 FACE_SMOOTHING_ALPHA = 0.35  # Lower = smoother; higher = more responsive.
+SWAP_HANDEDNESS = False  # Set True if the camera labels your physical hands backward.
+SHOW_HAND_DEBUG = True  # Set False after calibration to remove the diagnostic overlay.
 MAX_NUM_FACES = 1
 MAX_NUM_HANDS = 2
 OPACITY_HISTORY_LENGTH = 5
@@ -159,6 +161,7 @@ class GestureState:
     left_gesture: str = "unknown"
     boost: bool = False
     scan_pulse: float = 0.0
+    hand_debug: List[str] = field(default_factory=list)
     events: List[str] = field(default_factory=list)
 
 
@@ -225,12 +228,16 @@ class GestureController:
         Missing hands intentionally do not reset state, so controls remain stable.
         """
         self.state.events = []
+        self.state.hand_debug = []
         self.state.scan_pulse *= 0.90
         visible_gestures = {}
         for hand_landmarks, handedness in zip(hand_landmarks_list, handedness_list):
-            label = handedness[0].category_name.lower()
+            raw_label = handedness[0].category_name.lower()
+            label = ("left" if raw_label == "right" else "right") if SWAP_HANDEDNESS else raw_label
+            detected_fingers = count_extended_fingers(hand_landmarks, label)
+            self.state.hand_debug.append(f"raw:{raw_label} -> {label}  fingers:{detected_fingers}")
             if label == "right":
-                fingers = count_extended_fingers(hand_landmarks, label)
+                fingers = detected_fingers
                 gesture = RIGHT_GESTURE_NAMES[fingers]
                 points = list(hand_landmarks)
                 # A thumb pointing upward with all other fingers folded is a
@@ -316,6 +323,17 @@ def put_status(canvas: np.ndarray, state: GestureState) -> None:
     cv2.putText(canvas, text, (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 100, 100), 1, cv2.LINE_AA)
 
 
+def put_hand_debug(frame: np.ndarray, state: GestureState) -> None:
+    """Show raw/effective labels and counts while calibrating the camera."""
+    if not SHOW_HAND_DEBUG:
+        return
+    cv2.putText(frame, "HAND DEBUG (set SHOW_HAND_DEBUG=False when done)", (12, 24),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
+    for row, line in enumerate(state.hand_debug, start=1):
+        cv2.putText(frame, line, (12, 24 + row * 20), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.48, (0, 220, 255), 1, cv2.LINE_AA)
+
+
 def main() -> None:
     face_model = ensure_model(MODEL_DIR / "face_landmarker.task", FACE_MODEL_URL)
     hand_model = ensure_model(MODEL_DIR / "hand_landmarker.task", HAND_MODEL_URL)
@@ -379,6 +397,7 @@ def main() -> None:
                 else:
                     face_smoother.reset()
                 put_status(replica, state)
+                put_hand_debug(replica, state)
                 combined = np.hstack((mirrored, replica))
                 cv2.imshow("Neon Dot-Face Tracker", combined)
 
