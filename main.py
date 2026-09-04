@@ -49,7 +49,12 @@ NEON_PALETTE = {
 DEFAULT_COLOR = NEON_PALETTE[1]
 DEFAULT_OPACITY = 1.0
 
-# A curated subset keeps the constellation readable while showing key contours.
+# The full tessellation adds structure; the contour subset stays brighter so the
+# mesh remains readable instead of becoming a wall of equally bright lines.
+FACE_TESSELLATION = {
+    (connection.start, connection.end)
+    for connection in vision.FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION
+}
 FACE_CONNECTIONS = {
     (connection.start, connection.end)
     for connection in (
@@ -58,6 +63,7 @@ FACE_CONNECTIONS = {
         + list(vision.FaceLandmarksConnections.FACE_LANDMARKS_RIGHT_IRIS)
     )
 }
+FEATURE_INDICES = {0, 13, 14, 17, 61, 291, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477}
 
 
 def ensure_model(path: Path, url: str) -> Path:
@@ -120,25 +126,37 @@ def draw_neon_face(
 ) -> np.ndarray:
     """Render the face as one glow layer plus a crisp landmark layer."""
     glow = np.zeros((panel_height, panel_width, 3), dtype=np.uint8)
+    mesh = np.zeros_like(glow)
     crisp = np.zeros_like(glow)
     landmarks = list(landmarks)
     points = [normalized_to_pixel(point, panel_width, panel_height) for point in landmarks]
+    mesh_color = tuple(max(1, int(channel * 0.24)) for channel in color)
+    accent_color = tuple(min(255, int(channel * 1.15)) for channel in color)
+
+    # A dim full wireframe provides a futuristic 3D feel without overpowering
+    # the brighter face outline and expression landmarks.
+    for start, end in FACE_TESSELLATION:
+        if start < len(points) and end < len(points):
+            cv2.line(mesh, points[start], points[end], mesh_color, 1, cv2.LINE_AA)
 
     # Soft, blurred geometry underneath bright geometry creates the neon effect.
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
-            cv2.line(glow, points[start], points[end], color, 2, cv2.LINE_AA)
+            cv2.line(glow, points[start], points[end], accent_color, 3, cv2.LINE_AA)
     for x, y in points:
-        cv2.circle(glow, (x, y), 5, color, -1, cv2.LINE_AA)
-    glow = cv2.GaussianBlur(glow, (0, 0), sigmaX=3.0)
+        cv2.circle(glow, (x, y), 6, accent_color, -1, cv2.LINE_AA)
+    glow = cv2.GaussianBlur(glow, (0, 0), sigmaX=4.0)
 
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
-            cv2.line(crisp, points[start], points[end], color, 1, cv2.LINE_AA)
-    for x, y in points:
-        cv2.circle(crisp, (x, y), 1, color, -1, cv2.LINE_AA)
+            cv2.line(crisp, points[start], points[end], accent_color, 1, cv2.LINE_AA)
+    for index, (x, y) in enumerate(points):
+        cv2.circle(crisp, (x, y), 2 if index in FEATURE_INDICES else 1, accent_color, -1, cv2.LINE_AA)
 
-    rendered = cv2.addWeighted(glow, 0.85, crisp, 1.0, 0)
+    # Layering is deliberately light: mesh first, then glow, then crisp details.
+    rendered = cv2.addWeighted(mesh, 0.95, glow, 0.9, 0)
+    rendered = cv2.addWeighted(rendered, 1.0, crisp, 1.0, 0)
+
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
 
 
