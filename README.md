@@ -35,4 +35,4 @@ Add additional gesture names or classification rules inside `GestureController.u
 
 ## Calibration
 
-For faster response without jitter, tune `FACE_SMOOTHING_ALPHA` in small steps. Start at `0.35`, try `0.45`, then `0.55` if movement still feels delayed; stop increasing when the mouth or jaw begins to shimmer. If the physical hand shown for color selection appears under the wrong label, set `SWAP_HANDEDNESS = True`. Keep `SHOW_HAND_DEBUG = True` while testing: the replica panel will show the raw MediaPipe label, effective label, and counted fingers. Set it to `False` after calibration.
+For faster response without jitter, tune `FACE_SMOOTHING_ALPHA` in small steps. Start at `0.35`, try `0.45`, then `0.55` if movement still feels delayed; stop increasing when the mouth or jaw begins to shimmer. If the physical hand shown for color selection appears under the wrong label, set `SWAP_HANDEDNESS = True`. The visual output intentionally contains no text overlays; use temporary logging around `GestureController.update()` when debugging counts.

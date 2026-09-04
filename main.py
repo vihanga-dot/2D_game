@@ -27,7 +27,6 @@ MIN_DETECTION_CONFIDENCE = 0.5
 MIN_TRACKING_CONFIDENCE = 0.5
 FACE_SMOOTHING_ALPHA = 0.35  # Lower = smoother; higher = more responsive.
 SWAP_HANDEDNESS = False  # Set True if the camera labels your physical hands backward.
-SHOW_HAND_DEBUG = True  # Set False after calibration to remove the diagnostic overlay.
 MAX_NUM_FACES = 1
 MAX_NUM_HANDS = 2
 OPACITY_HISTORY_LENGTH = 5
@@ -317,23 +316,6 @@ def draw_neon_face(
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
 
 
-def put_status(canvas: np.ndarray, state: GestureState) -> None:
-    """Add small, unobtrusive control feedback to the replica panel."""
-    text = f"{state.right_gesture}  |  {state.left_gesture}  |  opacity {state.opacity:.0%}"
-    cv2.putText(canvas, text, (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 100, 100), 1, cv2.LINE_AA)
-
-
-def put_hand_debug(frame: np.ndarray, state: GestureState) -> None:
-    """Show raw/effective labels and counts while calibrating the camera."""
-    if not SHOW_HAND_DEBUG:
-        return
-    cv2.putText(frame, "HAND DEBUG (set SHOW_HAND_DEBUG=False when done)", (12, 24),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 220, 255), 1, cv2.LINE_AA)
-    for row, line in enumerate(state.hand_debug, start=1):
-        cv2.putText(frame, line, (12, 24 + row * 20), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.48, (0, 220, 255), 1, cv2.LINE_AA)
-
-
 def main() -> None:
     face_model = ensure_model(MODEL_DIR / "face_landmarker.task", FACE_MODEL_URL)
     hand_model = ensure_model(MODEL_DIR / "hand_landmarker.task", HAND_MODEL_URL)
@@ -396,8 +378,6 @@ def main() -> None:
                     )
                 else:
                     face_smoother.reset()
-                put_status(replica, state)
-                put_hand_debug(replica, state)
                 combined = np.hstack((mirrored, replica))
                 cv2.imshow("Neon Dot-Face Tracker", combined)
 
