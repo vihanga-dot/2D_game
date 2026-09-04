@@ -130,12 +130,12 @@ def draw_neon_face(
     crisp = np.zeros_like(glow)
     landmarks = list(landmarks)
     points = [normalized_to_pixel(point, panel_width, panel_height) for point in landmarks]
-    # Normalize luminance so darker hues (especially green/purple) are as clear
-    # as yellow, while the tinted core still preserves the selected neon color.
-    mesh_color = tuple(max(14, int(channel * 0.38)) for channel in color)
-    accent_color = tuple(
-        min(255, max(72, int(channel * 0.75 + 255 * 0.25))) for channel in color
-    )
+    # Keep structure independent from hue: a restrained blue-gray wireframe
+    # remains readable even when the selected neon color is very saturated.
+    mesh_color = (42, 68, 74)
+    # Avoid mixing every color with white; that was making some hues bloom and
+    # obscure the face. The selected color now controls a crisp, modest accent.
+    accent_color = tuple(min(230, max(28, int(channel * 0.82))) for channel in color)
 
     # A dim full wireframe provides a futuristic 3D feel without overpowering
     # the brighter face outline and expression landmarks.
@@ -146,10 +146,10 @@ def draw_neon_face(
     # Soft, blurred geometry underneath bright geometry creates the neon effect.
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
-            cv2.line(glow, points[start], points[end], accent_color, 3, cv2.LINE_AA)
+            cv2.line(glow, points[start], points[end], accent_color, 2, cv2.LINE_AA)
     for x, y in points:
-        cv2.circle(glow, (x, y), 6, accent_color, -1, cv2.LINE_AA)
-    glow = cv2.GaussianBlur(glow, (0, 0), sigmaX=4.0)
+        cv2.circle(glow, (x, y), 5, accent_color, -1, cv2.LINE_AA)
+    glow = cv2.GaussianBlur(glow, (0, 0), sigmaX=3.0)
 
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
@@ -158,7 +158,7 @@ def draw_neon_face(
         cv2.circle(crisp, (x, y), 2 if index in FEATURE_INDICES else 1, accent_color, -1, cv2.LINE_AA)
 
     # Layering is deliberately light: mesh first, then glow, then crisp details.
-    rendered = cv2.addWeighted(mesh, 0.95, glow, 0.9, 0)
+    rendered = cv2.addWeighted(mesh, 1.15, glow, 0.55, 0)
     rendered = cv2.addWeighted(rendered, 1.0, crisp, 1.0, 0)
 
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
