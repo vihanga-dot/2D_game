@@ -13,6 +13,8 @@ python main.py
 
 Press **q** while the OpenCV window is focused to exit. The app requests 640×480 and falls back to the camera's supported resolution. Detection thresholds and pinch calibration fractions are constants near the top of `main.py` and may need adjustment for another webcam or lighting conditions.
 
+Press **r** to start or stop recording the complete split-screen window. Recordings are saved as timestamped MP4 files in the `recordings/` folder. Pressing **q** while recording closes the file cleanly.
+
 ## Adding gesture features
 
 Hand interpretation is centralized in `GestureController`. It exposes stable names such as `right_fist`, `right_peace`, `right_open_palm`, `left_pinch`, and `left_open_hand`. Register a transition callback in `main()` without changing the camera loop:

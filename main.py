@@ -8,6 +8,7 @@ Press q in the OpenCV window to quit.
 
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 import time
 from typing import Callable, Dict, Iterable, List, Tuple
@@ -41,6 +42,8 @@ THUMB_X_MARGIN = 0.025
 THUMB_REACH_RATIO = 1.08
 
 MODEL_DIR = Path(__file__).with_name("models")
+RECORDING_DIR = Path(__file__).with_name("recordings")
+RECORDING_FPS = 30.0
 FACE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
 
@@ -317,7 +320,7 @@ def draw_neon_face(
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
 
 
-def draw_hud(canvas: np.ndarray, state: GestureState, fps: float) -> None:
+def draw_hud(canvas: np.ndarray, state: GestureState, fps: float, recording: bool = False) -> None:
     """Draw compact live controls on the replica panel only."""
     panel = canvas.copy()
     cv2.rectangle(panel, (10, 10), (178, 93), (4, 13, 18), -1)
@@ -331,6 +334,19 @@ def draw_hud(canvas: np.ndarray, state: GestureState, fps: float) -> None:
     for row, text in enumerate(rows):
         cv2.putText(canvas, text, (20, 34 + row * 24), cv2.FONT_HERSHEY_SIMPLEX,
                     0.48, hud_color, 1, cv2.LINE_AA)
+    if recording:
+        cv2.circle(canvas, (163, 20), 5, (0, 0, 255), -1, cv2.LINE_AA)
+
+
+def create_video_writer(width: int, height: int) -> Tuple[cv2.VideoWriter, Path]:
+    """Create a timestamped MP4 writer for the combined display frame."""
+    RECORDING_DIR.mkdir(parents=True, exist_ok=True)
+    path = RECORDING_DIR / f"neon_tracker_{datetime.now():%Y%m%d_%H%M%S}.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), RECORDING_FPS, (width, height))
+    if not writer.isOpened():
+        writer.release()
+        raise RuntimeError("Could not start MP4 recording. Try installing a codec-enabled OpenCV build.")
+    return writer, path
 
 
 def main() -> None:
@@ -365,6 +381,8 @@ def main() -> None:
     timestamp_ms = 0
     fps = 0.0
     previous_time = time.perf_counter()
+    video_writer: cv2.VideoWriter | None = None
+    recording_path: Path | None = None
 
     with vision.FaceLandmarker.create_from_options(face_options) as face_landmarker, vision.HandLandmarker.create_from_options(hand_options) as hand_landmarker:
         try:
@@ -403,13 +421,29 @@ def main() -> None:
                     )
                 else:
                     face_smoother.reset()
-                draw_hud(replica, state, fps)
+                draw_hud(replica, state, fps, recording=video_writer is not None)
                 combined = np.hstack((mirrored, replica))
                 cv2.imshow("Neon Dot-Face Tracker", combined)
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                if video_writer is not None:
+                    video_writer.write(combined)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("r"):
+                    if video_writer is None:
+                        video_writer, recording_path = create_video_writer(combined.shape[1], combined.shape[0])
+                        print(f"Recording started: {recording_path}")
+                    else:
+                        video_writer.release()
+                        video_writer = None
+                        print(f"Recording saved: {recording_path}")
+                        recording_path = None
+                if key == ord("q"):
                     break
         finally:
+            if video_writer is not None:
+                video_writer.release()
+                print(f"Recording saved: {recording_path}")
             cap.release()
             cv2.destroyAllWindows()
 
