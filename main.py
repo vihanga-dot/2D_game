@@ -130,8 +130,12 @@ def draw_neon_face(
     crisp = np.zeros_like(glow)
     landmarks = list(landmarks)
     points = [normalized_to_pixel(point, panel_width, panel_height) for point in landmarks]
-    mesh_color = tuple(max(1, int(channel * 0.24)) for channel in color)
-    accent_color = tuple(min(255, int(channel * 1.15)) for channel in color)
+    # Normalize luminance so darker hues (especially green/purple) are as clear
+    # as yellow, while the tinted core still preserves the selected neon color.
+    mesh_color = tuple(max(14, int(channel * 0.38)) for channel in color)
+    accent_color = tuple(
+        min(255, max(72, int(channel * 0.75 + 255 * 0.25))) for channel in color
+    )
 
     # A dim full wireframe provides a futuristic 3D feel without overpowering
     # the brighter face outline and expression landmarks.
