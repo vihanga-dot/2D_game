@@ -33,6 +33,9 @@ OPACITY_HISTORY_LENGTH = 5
 # fractions if a different camera, distance, or lighting setup needs it.
 PINCH_MIN_FRACTION = 0.035
 PINCH_MAX_FRACTION = 0.24
+FINGER_Y_MARGIN = 0.025  # Ignore tiny vertical landmark jitter when counting.
+THUMB_X_MARGIN = 0.025
+THUMB_REACH_RATIO = 1.08
 
 MODEL_DIR = Path(__file__).with_name("models")
 FACE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
@@ -100,16 +103,33 @@ def count_extended_fingers(hand_landmarks: Iterable, handedness: str) -> int:
     """
     points = list(hand_landmarks)
     count = 0
+    wrist = points[0]
 
-    # Index, middle, ring, and pinky: a raised fingertip is above its PIP joint.
+    # A finger must clear its PIP joint by a margin and extend farther from the
+    # wrist than that joint. Using both tests avoids counting curled fingers when
+    # the hand is tilted or the webcam landmarks jitter by a few pixels.
     for tip_index, pip_index in ((8, 6), (12, 10), (16, 14), (20, 18)):
-        if points[tip_index].y < points[pip_index].y:
+        tip = points[tip_index]
+        pip = points[pip_index]
+        tip_reaches_up = tip.y < pip.y - FINGER_Y_MARGIN
+        tip_reaches_out = np.hypot(tip.x - wrist.x, tip.y - wrist.y) > (
+            np.hypot(pip.x - wrist.x, pip.y - wrist.y) * 1.05
+        )
+        if tip_reaches_up and tip_reaches_out:
             count += 1
 
+    # Compare the thumb tip with both its IP joint and wrist. The direction
+    # check handles left/right hands; the reach check rejects a curled thumb
+    # that happens to sit slightly outside the hand silhouette.
+    thumb_tip, thumb_ip = points[4], points[3]
+    thumb_reaches_out = np.hypot(thumb_tip.x - wrist.x, thumb_tip.y - wrist.y) > (
+        np.hypot(thumb_ip.x - wrist.x, thumb_ip.y - wrist.y) * THUMB_REACH_RATIO
+    )
     if handedness.lower() == "right":
-        if points[4].x < points[3].x:
-            count += 1
-    elif points[4].x > points[3].x:
+        thumb_points_out = thumb_tip.x < thumb_ip.x - THUMB_X_MARGIN
+    else:
+        thumb_points_out = thumb_tip.x > thumb_ip.x + THUMB_X_MARGIN
+    if thumb_points_out and thumb_reaches_out:
         count += 1
     return count
 
