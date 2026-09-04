@@ -15,6 +15,8 @@ Press **q** while the OpenCV window is focused to exit. The app requests 640×48
 
 Press **r** to start or stop recording the complete split-screen window. Recordings are saved as timestamped MP4 files in the `recordings/` folder. Pressing **q** while recording closes the file cleanly.
 
+The replica now uses adaptive smoothing: it settles softly during small movements and responds faster during larger head motion. The peace sign toggles between the full `hologram` tessellation and a lighter `dots` mode. Depth-aware point sizing, a restrained halo, mouth ripple, thumbs-up boost, and two-hand scan pulse are also enabled without adding text to the camera panel.
+
 ## Adding gesture features
 
 Hand interpretation is centralized in `GestureController`. It exposes stable names such as `right_fist`, `right_peace`, `right_open_palm`, `left_pinch`, and `left_open_hand`. Register a transition callback in `main()` without changing the camera loop:

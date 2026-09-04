@@ -28,6 +28,8 @@ REQUESTED_HEIGHT = 480
 MIN_DETECTION_CONFIDENCE = 0.5
 MIN_TRACKING_CONFIDENCE = 0.5
 FACE_SMOOTHING_ALPHA = 0.35  # Lower = smoother; higher = more responsive.
+FACE_FAST_ALPHA = 0.65
+FACE_MOTION_THRESHOLD = 0.008
 SWAP_HANDEDNESS = False  # Set True if the camera labels your physical hands backward.
 MAX_NUM_FACES = 1
 MAX_NUM_HANDS = 2
@@ -164,6 +166,7 @@ class GestureState:
     left_gesture: str = "unknown"
     boost: bool = False
     scan_pulse: float = 0.0
+    display_mode: str = "hologram"
     hand_debug: List[str] = field(default_factory=list)
     events: List[str] = field(default_factory=list)
 
@@ -194,7 +197,10 @@ class LandmarkSmoother:
         if self._previous is None or self._previous.shape != current.shape:
             self._previous = current
         else:
-            self._previous += self.alpha * (current - self._previous)
+            motion = float(np.mean(np.linalg.norm(current[:, :2] - self._previous[:, :2], axis=1)))
+            motion_ratio = float(np.clip(motion / FACE_MOTION_THRESHOLD, 0.0, 1.0))
+            alpha = self.alpha + (FACE_FAST_ALPHA - self.alpha) * motion_ratio
+            self._previous += alpha * (current - self._previous)
         return [SmoothPoint(float(x), float(y), float(z)) for x, y, z in self._previous]
 
 
@@ -253,6 +259,8 @@ class GestureController:
                 self.state.color = NEON_PALETTE[fingers]
                 self.state.boost = gesture == "thumbs_up"
                 visible_gestures[label] = gesture
+                if gesture == "peace" and self._last_labels.get("right") != "peace":
+                    self.state.display_mode = "dots" if self.state.display_mode == "hologram" else "hologram"
                 self._emit_transition("right", gesture)
             elif label == "left":
                 current_opacity = pinch_opacity(hand_landmarks, width, height)
@@ -279,6 +287,8 @@ def draw_neon_face(
     panel_height: int,
     color: Tuple[int, int, int],
     opacity: float,
+    display_mode: str = "hologram",
+    boost: bool = False,
 ) -> np.ndarray:
     """Render the face as one glow layer plus a crisp landmark layer."""
     glow = np.zeros((panel_height, panel_width, 3), dtype=np.uint8)
@@ -286,6 +296,9 @@ def draw_neon_face(
     crisp = np.zeros_like(glow)
     landmarks = list(landmarks)
     points = [normalized_to_pixel(point, panel_width, panel_height) for point in landmarks]
+    z_values = np.array([getattr(point, "z", 0.0) for point in landmarks], dtype=np.float32)
+    z_span = max(float(np.percentile(z_values, 90) - np.percentile(z_values, 10)), 0.001)
+    depth = np.clip((np.percentile(z_values, 90) - z_values) / z_span, 0.0, 1.0)
     # Keep structure independent from hue: a restrained blue-gray wireframe
     # remains readable even when the selected neon color is very saturated.
     mesh_color = (42, 68, 74)
@@ -295,23 +308,34 @@ def draw_neon_face(
 
     # A dim full wireframe provides a futuristic 3D feel without overpowering
     # the brighter face outline and expression landmarks.
-    for start, end in FACE_TESSELLATION:
-        if start < len(points) and end < len(points):
-            cv2.line(mesh, points[start], points[end], mesh_color, 1, cv2.LINE_AA)
+    if display_mode == "hologram":
+        for start, end in FACE_TESSELLATION:
+            if start < len(points) and end < len(points):
+                cv2.line(mesh, points[start], points[end], mesh_color, 1, cv2.LINE_AA)
 
     # Soft, blurred geometry underneath bright geometry creates the neon effect.
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
             cv2.line(glow, points[start], points[end], accent_color, 2, cv2.LINE_AA)
-    for x, y in points:
-        cv2.circle(glow, (x, y), 5, accent_color, -1, cv2.LINE_AA)
+    for index, (x, y) in enumerate(points):
+        radius = 5 + int(depth[index] * 2) + int(boost)
+        cv2.circle(glow, (x, y), radius, accent_color, -1, cv2.LINE_AA)
     glow = cv2.GaussianBlur(glow, (0, 0), sigmaX=3.0)
 
     for start, end in FACE_CONNECTIONS:
         if start < len(points) and end < len(points):
             cv2.line(crisp, points[start], points[end], accent_color, 1, cv2.LINE_AA)
     for index, (x, y) in enumerate(points):
-        cv2.circle(crisp, (x, y), 2 if index in FEATURE_INDICES else 1, accent_color, -1, cv2.LINE_AA)
+        radius = (2 if index in FEATURE_INDICES else 1) + int(depth[index] > 0.72)
+        cv2.circle(crisp, (x, y), radius, accent_color, -1, cv2.LINE_AA)
+
+    # A talking mouth produces a restrained local ripple instead of changing
+    # landmark coordinates, so expression motion remains physically believable.
+    if len(points) > 14:
+        mouth_gap = abs(landmarks[14].y - landmarks[13].y)
+        if mouth_gap > 0.025:
+            mouth_center = ((points[13][0] + points[14][0]) // 2, (points[13][1] + points[14][1]) // 2)
+            cv2.circle(glow, mouth_center, max(4, int(mouth_gap * panel_height * 1.5)), accent_color, 1, cv2.LINE_AA)
 
     # Layering is deliberately light: mesh first, then glow, then crisp details.
     rendered = cv2.addWeighted(mesh, 1.15, glow, 0.55, 0)
@@ -320,16 +344,36 @@ def draw_neon_face(
     return cv2.addWeighted(np.zeros_like(rendered), 1.0 - opacity, rendered, opacity, 0)
 
 
+def draw_hologram_atmosphere(canvas: np.ndarray, landmarks: Iterable, scan_pulse: float, boost: bool, phase: float) -> None:
+    """Add restrained halo, scan beam, and head-turn-friendly atmosphere."""
+    points = [normalized_to_pixel(point, canvas.shape[1], canvas.shape[0]) for point in landmarks]
+    if not points:
+        return
+    xs, ys = zip(*points)
+    center = (int((min(xs) + max(xs)) / 2), int((min(ys) + max(ys)) / 2))
+    radius = max(int((max(xs) - min(xs)) * 0.62), 40)
+    overlay = np.zeros_like(canvas)
+    pulse = 1.0 + 0.025 * np.sin(phase)
+    cv2.ellipse(overlay, center, (int(radius * pulse), int(radius * 1.18 * pulse)), 0, 0, 360, (30, 78, 92), 1, cv2.LINE_AA)
+    if boost:
+        cv2.ellipse(overlay, center, (radius + 8, int(radius * 1.25)), 0, 0, 360, (80, 150, 170), 1, cv2.LINE_AA)
+    if scan_pulse > 0.05:
+        scan_y = int((phase * 18) % canvas.shape[0])
+        cv2.line(overlay, (0, scan_y), (canvas.shape[1], scan_y), (90, 180, 190), 1, cv2.LINE_AA)
+    cv2.addWeighted(canvas, 1.0, overlay, 0.48 * max(scan_pulse, 0.35), 0, canvas)
+
+
 def draw_hud(canvas: np.ndarray, state: GestureState, fps: float, recording: bool = False) -> None:
     """Draw compact live controls on the replica panel only."""
     panel = canvas.copy()
-    cv2.rectangle(panel, (10, 10), (178, 93), (4, 13, 18), -1)
+    cv2.rectangle(panel, (10, 10), (178, 116), (4, 13, 18), -1)
     cv2.addWeighted(panel, 0.78, canvas, 0.22, 0, canvas)
     hud_color = (180, 240, 240)
     rows = (
         f"OPACITY  {state.opacity:>5.0%}",
         f"FINGERS  {state.right_fingers}/5",
         f"FPS      {fps:>5.1f}",
+        f"MODE     {state.display_mode}",
     )
     for row, text in enumerate(rows):
         cv2.putText(canvas, text, (20, 34 + row * 24), cv2.FONT_HERSHEY_SIMPLEX,
@@ -417,7 +461,20 @@ def main() -> None:
                 if face_result.face_landmarks:
                     smooth_face = face_smoother.update(face_result.face_landmarks[0])
                     replica = draw_neon_face(
-                        smooth_face, frame_width, frame_height, state.color, state.opacity
+                        smooth_face,
+                        frame_width,
+                        frame_height,
+                        state.color,
+                        state.opacity,
+                        state.display_mode,
+                        state.boost,
+                    )
+                    draw_hologram_atmosphere(
+                        replica,
+                        smooth_face,
+                        state.scan_pulse,
+                        state.boost,
+                        timestamp_ms / 1000.0,
                     )
                 else:
                     face_smoother.reset()
