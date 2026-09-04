@@ -28,6 +28,7 @@ REQUESTED_HEIGHT = 480
 INFERENCE_WIDTH = 320
 INFERENCE_HEIGHT = 240
 HAND_DETECTION_INTERVAL = 2  # Run hand inference every other frame.
+CLAP_DISTANCE_FRACTION = 0.16  # Normalized palm-center distance for a clap.
 MIN_DETECTION_CONFIDENCE = 0.5
 MIN_TRACKING_CONFIDENCE = 0.5
 FACE_SMOOTHING_ALPHA = 0.35  # Lower = smoother; higher = more responsive.
@@ -176,6 +177,7 @@ class GestureState:
     boost: bool = False
     scan_pulse: float = 0.0
     display_mode: str = "hologram"
+    clap_distance: float = 1.0
     hand_debug: List[str] = field(default_factory=list)
     events: List[str] = field(default_factory=list)
 
@@ -226,6 +228,7 @@ class GestureController:
         self._opacity_history: deque[float] = deque(maxlen=OPACITY_HISTORY_LENGTH)
         self._last_labels: Dict[str, str] = {}
         self._handlers: Dict[str, List[Callable[[GestureState], None]]] = {}
+        self._clap_active = False
 
     def on(self, event_name: str, handler: Callable[[GestureState], None]) -> None:
         """Register a function called once when a named gesture changes into view."""
@@ -249,11 +252,16 @@ class GestureController:
         self.state.hand_debug = []
         self.state.scan_pulse *= 0.90
         visible_gestures = {}
+        palm_centers = {}
         for hand_landmarks, handedness in zip(hand_landmarks_list, handedness_list):
             raw_label = handedness[0].category_name.lower()
             label = ("left" if raw_label == "right" else "right") if SWAP_HANDEDNESS else raw_label
             detected_fingers = count_extended_fingers(hand_landmarks, label)
             self.state.hand_debug.append(f"raw:{raw_label} -> {label}  fingers:{detected_fingers}")
+            palm_points = list(hand_landmarks)
+            palm_centers[label] = np.mean(
+                [(palm_points[index].x, palm_points[index].y) for index in (0, 5, 9, 13, 17)], axis=0
+            )
             if label == "right":
                 fingers = detected_fingers
                 gesture = RIGHT_GESTURE_NAMES[fingers]
@@ -268,8 +276,6 @@ class GestureController:
                 self.state.color = NEON_PALETTE[fingers]
                 self.state.boost = gesture == "thumbs_up"
                 visible_gestures[label] = gesture
-                if gesture == "peace" and self._last_labels.get("right") != "peace":
-                    self.state.display_mode = "dots" if self.state.display_mode == "hologram" else "hologram"
                 self._emit_transition("right", gesture)
             elif label == "left":
                 current_opacity = pinch_opacity(hand_landmarks, width, height)
@@ -287,6 +293,17 @@ class GestureController:
             self._emit_transition("both", "open")
         else:
             self._last_labels.pop("both", None)
+        if "left" in palm_centers and "right" in palm_centers:
+            self.state.clap_distance = float(np.linalg.norm(palm_centers["left"] - palm_centers["right"]))
+            clap_now = self.state.clap_distance <= CLAP_DISTANCE_FRACTION
+            if clap_now and not self._clap_active:
+                self.state.display_mode = "dots" if self.state.display_mode == "hologram" else "hologram"
+                self.state.scan_pulse = 1.0
+                self._emit_transition("both", "clap")
+            self._clap_active = clap_now
+        else:
+            self.state.clap_distance = 1.0
+            self._clap_active = False
         return self.state
 
 

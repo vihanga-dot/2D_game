@@ -15,7 +15,7 @@ Press **q** while the OpenCV window is focused to exit. The app requests 640×48
 
 Press **r** to start or stop recording the complete split-screen window. Recordings are saved as timestamped MP4 files in the `recordings/` folder. Pressing **q** while recording closes the file cleanly.
 
-The replica now uses adaptive smoothing: it settles softly during small movements and responds faster during larger head motion. The peace sign toggles between the full `hologram` tessellation and a lighter `dots` mode. Depth-aware point sizing, a restrained halo, mouth ripple, thumbs-up boost, and two-hand scan pulse are also enabled without adding text to the camera panel.
+The replica now uses adaptive smoothing: it settles softly during small movements and responds faster during larger head motion. Bring both palms together in a **clap** to toggle between the full `hologram` tessellation and lighter `dots` mode; the switch is debounced while palms remain together. Depth-aware point sizing, a restrained halo, mouth ripple, thumbs-up boost, and two-hand scan pulse are also enabled without adding text to the camera panel. Tune `CLAP_DISTANCE_FRACTION` if the clap triggers too early or too late.
 
 Performance defaults run MediaPipe inference at 320×240 while displaying at the requested camera resolution, run hand inference every other frame, render a lighter tessellation, glow only on feature landmarks, and blur glow at half resolution. Tune `INFERENCE_WIDTH`, `INFERENCE_HEIGHT`, and `HAND_DETECTION_INTERVAL` near the top of `main.py` if you prefer more detail or more FPS.
 
