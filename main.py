@@ -25,6 +25,7 @@ REQUESTED_WIDTH = 640
 REQUESTED_HEIGHT = 480
 MIN_DETECTION_CONFIDENCE = 0.5
 MIN_TRACKING_CONFIDENCE = 0.5
+FACE_SMOOTHING_ALPHA = 0.35  # Lower = smoother; higher = more responsive.
 MAX_NUM_FACES = 1
 MAX_NUM_HANDS = 2
 OPACITY_HISTORY_LENGTH = 5
@@ -159,6 +160,36 @@ class GestureState:
     boost: bool = False
     scan_pulse: float = 0.0
     events: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SmoothPoint:
+    """Small landmark-compatible point used by the temporal face filter."""
+
+    x: float
+    y: float
+    z: float = 0.0
+
+
+class LandmarkSmoother:
+    """Apply an exponential moving average to all face landmarks."""
+
+    def __init__(self, alpha: float = FACE_SMOOTHING_ALPHA) -> None:
+        self.alpha = float(np.clip(alpha, 0.05, 1.0))
+        self._previous: np.ndarray | None = None
+
+    def reset(self) -> None:
+        """Discard stale coordinates after a face leaves the camera view."""
+        self._previous = None
+
+    def update(self, landmarks: Iterable) -> List[SmoothPoint]:
+        """Return smoothed x/y/z landmarks while preserving the face shape."""
+        current = np.array([(point.x, point.y, getattr(point, "z", 0.0)) for point in landmarks], dtype=np.float32)
+        if self._previous is None or self._previous.shape != current.shape:
+            self._previous = current
+        else:
+            self._previous += self.alpha * (current - self._previous)
+        return [SmoothPoint(float(x), float(y), float(z)) for x, y, z in self._previous]
 
 
 class GestureController:
@@ -311,6 +342,7 @@ def main() -> None:
         raise RuntimeError("Could not open webcam. Check CAMERA_INDEX and camera permissions.")
 
     controller = GestureController()
+    face_smoother = LandmarkSmoother()
     # Future features can subscribe without modifying the tracking loop:
     # controller.on("right_open_palm", lambda state: start_particle_pulse())
     timestamp_ms = 0
@@ -340,9 +372,12 @@ def main() -> None:
 
                 replica = np.zeros_like(mirrored)
                 if face_result.face_landmarks:
+                    smooth_face = face_smoother.update(face_result.face_landmarks[0])
                     replica = draw_neon_face(
-                        face_result.face_landmarks[0], frame_width, frame_height, state.color, state.opacity
+                        smooth_face, frame_width, frame_height, state.color, state.opacity
                     )
+                else:
+                    face_smoother.reset()
                 put_status(replica, state)
                 combined = np.hstack((mirrored, replica))
                 cv2.imshow("Neon Dot-Face Tracker", combined)
