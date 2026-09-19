@@ -352,12 +352,6 @@ class TimerWindow(tk.Toplevel):
             if not self._played_final:
                 self.audio.play("final")
                 self._played_final     = True
-                self._last_minute_mark = int(e) // 60
-            else:
-                minute = int(e) // 60
-                if minute != self._last_minute_mark:
-                    self._last_minute_mark = minute
-                    self.audio.play("final")
 
 
 # ─────────────────────────────────────────────
