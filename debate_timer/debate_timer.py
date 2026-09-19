@@ -139,11 +139,9 @@ class AudioEngine:
 
     def reload(self, config):
         self._sounds.clear()
-        # The dashboard intentionally exposes one sound only. Reuse it for
-        # the warning, finish, and ten-second overtime alerts.
-        path = config.get("sound_warn", "")
-        for name in ("warn", "overtime", "10sec", "final"):
-            self.load(name, path)
+        self.load("warn",  config.get("sound_warn", ""))
+        self.load("final", config.get("sound_final", ""))
+        self.load("10sec", config.get("sound_10sec", ""))
 
 
 # ─────────────────────────────────────────────
@@ -343,9 +341,9 @@ class TimerWindow(tk.Toplevel):
             self.audio.play("warn")
             self._played_warn = True
 
-        if not self._played_overtime and e >= cfg["warn_overtime_at"]:
-            self.audio.play("overtime")
-            self._played_overtime = True
+        if not self._played_final and e >= cfg["warn_overtime_at"]:
+            self.audio.play("final")
+            self._played_final = True
 
         if e >= cfg["warn_overtime_at"]:
             ten = int(e) // 10
@@ -451,13 +449,15 @@ class ConfigWindow(tk.Tk):
             self._warn(c, "⚠  Video support is unavailable in this build", **pad)
 
         # ── Sounds ────────────────────────────────────────────────────────────
-        self._section(c, "WARNING SOUND  (used at warning, finish, and every 10 seconds in overtime)", **pad)
+        self._section(c, "SOUNDS", **pad)
         aft = [("Audio", "*.wav *.mp3 *.ogg"), ("All", "*.*")]
         self._file_row(c, "sound_warn", "Warning Sound", aft, **pad)
+        self._file_row(c, "sound_final", "Finish-Time Sound", aft, **pad)
+        self._file_row(c, "sound_10sec", "10-Second Overtime Sound", aft, **pad)
         if not PYGAME_AVAILABLE:
             self._warn(c, "⚠  Install pygame for audio  (pip install pygame)", **pad)
 
-        tk.Label(c, text="At the finish time, overtime begins automatically. The warning sound plays every 10 seconds during overtime.",
+        tk.Label(c, text="At the finish time, overtime begins automatically. The 10-second sound repeats during overtime.",
                  font=("Courier New", 10), fg="#778899", bg=BG,
                  anchor="w", justify="left", wraplength=620).pack(fill="x", pady=(8, 4), **pad)
 
