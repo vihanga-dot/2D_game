@@ -86,6 +86,11 @@ def format_time_input(total_seconds):
     return f"{m}.{s:02d}"
 
 
+def format_clock_input(total_seconds):
+    """Convert total seconds to the simpler MM:SS input format."""
+    return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
+
+
 def load_config():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -431,11 +436,19 @@ class ConfigWindow(tk.Tk):
         tg.columnconfigure(0, weight=1)
 
         total_secs_cfg = self.cfg.get("total_seconds", self.cfg["total_minutes"] * 60)
-        self.total_min_var    = tk.StringVar(value=format_time_input(total_secs_cfg))
-        self.warn_min_var     = tk.StringVar(value=format_time_input(self.cfg["warn_1_minute_at"]))
+        self.total_min_var    = tk.StringVar(value=format_clock_input(total_secs_cfg))
+        self.warn_min_var     = tk.StringVar(value=format_clock_input(self.cfg["warn_1_minute_at"]))
 
-        self._time_row(tg, 0, "Finish Time  (M.SS)", self.total_min_var)
-        self._time_row(tg, 1, "Warning Time  (M.SS)", self.warn_min_var)
+        self._time_row(tg, 0, "Finish Time  (MM:SS)", self.total_min_var)
+        self._time_row(tg, 1, "Warning Time  (MM:SS)", self.warn_min_var)
+
+        # ── Background video ──────────────────────────────────────────────────
+        self._section(c, "BACKGROUND VIDEO  (optional)", **pad)
+        self._file_row(c, "background_video", "Video File", [
+            ("Video", "*.mp4 *.avi *.mov *.mkv"), ("All", "*.*")
+        ], **pad)
+        if not VIDEO_AVAILABLE:
+            self._warn(c, "⚠  Video support is unavailable in this build", **pad)
 
         # ── Sounds ────────────────────────────────────────────────────────────
         self._section(c, "WARNING SOUND  (used at warning, finish, and every 10 seconds in overtime)", **pad)
@@ -503,7 +516,7 @@ class ConfigWindow(tk.Tk):
                    ).grid(row=row, column=1, sticky="w", pady=4, padx=(12, 0))
 
     def _time_row(self, grid, row, label, var):
-        """Entry widget that accepts M.SS format (e.g. 2.30 = 2 min 30 sec)."""
+        """Entry widget that accepts simple MM:SS format (e.g. 03:30)."""
         tk.Label(grid, text=label,
                  font=("Courier New", 11), fg="#AABBCC", bg="#0D0D1A",
                  anchor="w").grid(row=row, column=0, sticky="w", pady=4)
@@ -515,7 +528,7 @@ class ConfigWindow(tk.Tk):
                          insertbackground="#00FFB3",
                          relief="flat", width=8)
         entry.pack(side="left")
-        tk.Label(frame, text="  e.g. 2.30 = 2m30s",
+        tk.Label(frame, text="  e.g. 03:30",
                  font=("Courier New", 9), fg="#445566", bg="#0D0D1A"
                  ).pack(side="left")
 
