@@ -134,10 +134,11 @@ class AudioEngine:
 
     def reload(self, config):
         self._sounds.clear()
-        self.load("warn",     config.get("sound_warn", ""))
-        self.load("overtime", config.get("sound_overtime", ""))
-        self.load("10sec",    config.get("sound_10sec", ""))
-        self.load("final",    config.get("sound_final", ""))
+        # The dashboard intentionally exposes one sound only. Reuse it for
+        # the warning, finish, and ten-second overtime alerts.
+        path = config.get("sound_warn", "")
+        for name in ("warn", "overtime", "10sec", "final"):
+            self.load(name, path)
 
 
 # ─────────────────────────────────────────────
@@ -348,12 +349,6 @@ class TimerWindow(tk.Toplevel):
                 if e >= cfg["warn_overtime_at"] + 10:
                     self.audio.play("10sec")
 
-        if e >= cfg["final_time_at"]:
-            if not self._played_final:
-                self.audio.play("final")
-                self._played_final     = True
-
-
 # ─────────────────────────────────────────────
 #  Scrollable frame helper
 # ─────────────────────────────────────────────
@@ -429,51 +424,27 @@ class ConfigWindow(tk.Tk):
         c   = scroll.inner
         pad = {"padx": 28}
 
-        # ── Timing ────────────────────────────────────────────────────────────
-        self._section(c, "TIMING", **pad)
+        # ── Finish time ───────────────────────────────────────────────────────
+        self._section(c, "FINISH TIME", **pad)
         tg = tk.Frame(c, bg=BG)
         tg.pack(fill="x", **pad, pady=(0, 6))
         tg.columnconfigure(0, weight=1)
 
         total_secs_cfg = self.cfg.get("total_seconds", self.cfg["total_minutes"] * 60)
         self.total_min_var    = tk.StringVar(value=format_time_input(total_secs_cfg))
-        self.warn_min_var     = tk.StringVar(value=format_time_input(self.cfg["warn_1_minute_at"]))
-        self.overtime_min_var = tk.StringVar(value=format_time_input(self.cfg["warn_overtime_at"]))
-        self.final_min_var    = tk.StringVar(value=format_time_input(self.cfg["final_time_at"]))
 
-        self._time_row(tg, 0, "Total Speech Time  (M.SS)", self.total_min_var)
-        self._time_row(tg, 1, "Warning Sound at   (M.SS)", self.warn_min_var)
-        self._time_row(tg, 2, "Overtime Starts at (M.SS)", self.overtime_min_var)
-        self._time_row(tg, 3, "Final Time at      (M.SS)", self.final_min_var)
-
-        # ── Appearance ────────────────────────────────────────────────────────
-        self._section(c, "APPEARANCE", **pad)
-        ag = tk.Frame(c, bg=BG)
-        ag.pack(fill="x", **pad, pady=(0, 6))
-        ag.columnconfigure(0, weight=1)
-
-        self._color_row(ag, 0, "Timer Color",      "timer_color")
-        self._color_row(ag, 1, "Overtime Color",   "overtime_color")
-        self._color_row(ag, 2, "Background Color", "background_color")
-        self.font_override_var = tk.IntVar(value=self.cfg.get("font_size_override", 0))
-        self._spin_row(ag, 3, "Timer Font Size (0 = auto)", self.font_override_var, 0, 300)
-
-        # ── Background video ──────────────────────────────────────────────────
-        self._section(c, "BACKGROUND VIDEO", **pad)
-        self._file_row(c, "background_video", "Video File (.mp4 .avi .mov)",
-                       [("Video", "*.mp4 *.avi *.mov *.mkv"), ("All", "*.*")], **pad)
-        if not VIDEO_AVAILABLE:
-            self._warn(c, "⚠  Install opencv-python & Pillow for video support", **pad)
+        self._time_row(tg, 0, "Finish Time  (M.SS)", self.total_min_var)
 
         # ── Sounds ────────────────────────────────────────────────────────────
-        self._section(c, "SOUNDS  (leave blank = silent)", **pad)
+        self._section(c, "WARNING SOUND  (used at warning, finish, and every 10 seconds in overtime)", **pad)
         aft = [("Audio", "*.wav *.mp3 *.ogg"), ("All", "*.*")]
-        self._file_row(c, "sound_warn",     "Warning Sound",     aft, **pad)
-        self._file_row(c, "sound_overtime", "Overtime Sound",    aft, **pad)
-        self._file_row(c, "sound_10sec",    "Every-10s Sound",   aft, **pad)
-        self._file_row(c, "sound_final",    "Final Time Sound",  aft, **pad)
+        self._file_row(c, "sound_warn", "Warning Sound", aft, **pad)
         if not PYGAME_AVAILABLE:
             self._warn(c, "⚠  Install pygame for audio  (pip install pygame)", **pad)
+
+        tk.Label(c, text="At the finish time, overtime begins automatically. The warning sound plays every 10 seconds during overtime.",
+                 font=("Courier New", 10), fg="#778899", bg=BG,
+                 anchor="w", justify="left", wraplength=620).pack(fill="x", pady=(8, 4), **pad)
 
         tk.Frame(c, bg=BG, height=12).pack()
 
@@ -617,10 +588,11 @@ class ConfigWindow(tk.Tk):
         total_secs                     = parse_time_input(self.total_min_var.get())
         self.cfg["total_minutes"]      = total_secs // 60  # kept for legacy compat
         self.cfg["total_seconds"]      = total_secs        # new precise field
-        self.cfg["warn_1_minute_at"]   = parse_time_input(self.warn_min_var.get())
-        self.cfg["warn_overtime_at"]   = parse_time_input(self.overtime_min_var.get())
-        self.cfg["final_time_at"]      = parse_time_input(self.final_min_var.get())
-        self.cfg["font_size_override"] = self.font_override_var.get()
+        # The warning sound is the one-minute-before-finish warning.
+        self.cfg["warn_1_minute_at"]   = max(0, total_secs - 60)
+        # Overtime starts automatically when the configured speech time ends.
+        self.cfg["warn_overtime_at"]   = total_secs
+        self.cfg["final_time_at"]       = total_secs
 
     def _save(self):
         self._collect()
