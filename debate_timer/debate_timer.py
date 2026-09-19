@@ -432,8 +432,10 @@ class ConfigWindow(tk.Tk):
 
         total_secs_cfg = self.cfg.get("total_seconds", self.cfg["total_minutes"] * 60)
         self.total_min_var    = tk.StringVar(value=format_time_input(total_secs_cfg))
+        self.warn_min_var     = tk.StringVar(value=format_time_input(self.cfg["warn_1_minute_at"]))
 
         self._time_row(tg, 0, "Finish Time  (M.SS)", self.total_min_var)
+        self._time_row(tg, 1, "Warning Time  (M.SS)", self.warn_min_var)
 
         # ── Sounds ────────────────────────────────────────────────────────────
         self._section(c, "WARNING SOUND  (used at warning, finish, and every 10 seconds in overtime)", **pad)
@@ -588,8 +590,8 @@ class ConfigWindow(tk.Tk):
         total_secs                     = parse_time_input(self.total_min_var.get())
         self.cfg["total_minutes"]      = total_secs // 60  # kept for legacy compat
         self.cfg["total_seconds"]      = total_secs        # new precise field
-        # The warning sound is the one-minute-before-finish warning.
-        self.cfg["warn_1_minute_at"]   = max(0, total_secs - 60)
+        # The warning time is user-configurable (for example 3.30, 4.00, 4.30).
+        self.cfg["warn_1_minute_at"]   = parse_time_input(self.warn_min_var.get())
         # Overtime starts automatically when the configured speech time ends.
         self.cfg["warn_overtime_at"]   = total_secs
         self.cfg["final_time_at"]       = total_secs
