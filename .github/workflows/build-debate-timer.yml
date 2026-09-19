@@ -1,0 +1,51 @@
+name: Build Debate Timer Windows EXE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install packaging dependencies
+        run: python -m pip install --upgrade pip pyinstaller pygame pillow numpy opencv-python
+
+      - name: Build executable
+        working-directory: debate_timer
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name DebateTimer debate_timer.py
+
+      - name: Create release package
+        working-directory: debate_timer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item dist/DebateTimer.exe package/DebateTimer.exe
+          @'
+          Debate Timer for Windows
+
+          Run DebateTimer.exe. No Python installation is required.
+
+          Controls in fullscreen timer:
+            Space  Start/pause
+            R      Reset
+            F/F11  Toggle fullscreen
+            Esc    Exit
+
+          Settings are saved under %APPDATA%\\DebateTimer.
+          '@ | Set-Content package/README.txt
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: DebateTimer-Windows
+          path: debate_timer/package
+          if-no-files-found: error
+          retention-days: 30
