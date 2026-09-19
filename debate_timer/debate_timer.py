@@ -440,6 +440,14 @@ class ConfigWindow(tk.Tk):
         self._time_row(tg, 0, "Finish Time  (MM:SS)", self.total_min_var)
         self._time_row(tg, 1, "Warning Time  (MM:SS)", self.warn_min_var)
 
+        # ── Font colors ───────────────────────────────────────────────────────
+        self._section(c, "FONT COLORS", **pad)
+        colors = tk.Frame(c, bg=BG)
+        colors.pack(fill="x", **pad, pady=(0, 6))
+        colors.columnconfigure(0, weight=1)
+        self._color_row(colors, 0, "Normal Timer Color", "timer_color")
+        self._color_row(colors, 1, "Overtime Timer Color", "overtime_color")
+
         # ── Background video ──────────────────────────────────────────────────
         self._section(c, "BACKGROUND VIDEO  (optional)", **pad)
         self._file_row(c, "background_video", "Video File", [
